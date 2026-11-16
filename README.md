@@ -1,199 +1,140 @@
-# MatchLab — Soccer Forecasting Prototype
+# Soccer Forecast — Simple two-phase application
 
-A complete local Streamlit application for **Evaluating the Predictive Reliability, Probability Calibration, and Explainability of Machine Learning Frameworks in Soccer Match Forecasting**.
+## What you do
 
-Supports **1X2, O/U 1.5 and BTTS** with XGBoost, Dixon–Coles, temperature scaling, chronological market selection, TreeSHAP, and immutable forecast tracking.
+**Phase One:** upload a historical CSV → click **Train models & show results** → inspect charts.
 
-## Install in VS Code
+**Phase Two:** upload an upcoming-fixture CSV → click **Predict upcoming matches** → inspect probabilities and download predictions.
 
-Recommended: **Python 3.11 or 3.12, 64-bit**. Extract the ZIP and open the inner soccer_forecast folder (containing app.py) in VS Code.
+There are no database imports, league-eligibility settings, manually entered cutoffs, or xG requirements. This version is separate from the original research prototype.
 
-Windows PowerShell:
+## Start in VS Code (Windows)
+
+Extract this ZIP into a NEW folder and open soccer_simple in VS Code.
 
     py -3.11 -m venv .venv
-    .\.venv\Scripts\python.exe -m pip install --upgrade pip
     .\.venv\Scripts\python.exe -m pip install -r requirements.txt
     .\.venv\Scripts\python.exe -m streamlit run app.py
+
+Python 3.12 is also suitable. Substitute py -3.12 if that is your installed interpreter.
+If your .venv already exists, skip the first command.
+The installation includes scikit-learn, required by XGBClassifier.
 
 macOS / Linux:
 
     python3 -m venv .venv
-    .venv/bin/python -m pip install --upgrade pip
     .venv/bin/python -m pip install -r requirements.txt
     .venv/bin/python -m streamlit run app.py
 
-Open the URL printed in the terminal, normally **http://localhost:8501**.
-Select the .venv interpreter in VS Code. The included “Debug MatchLab” launch configuration supports breakpoints (install Microsoft's Python and Python Debugger extensions). run_windows.bat and run.sh launch the app after installation.
+Open the localhost address printed in the terminal, normally http://localhost:8501.
+VS Code includes a launch configuration for Python debugging.
 
-No API keys, accounts, internet data feeds or external database server are needed at runtime.
+## Phase One input
 
-## Try the whole workflow with synthetic data
+Use your existing Football-Data-style CSV:
+Date, HomeTeam, AwayTeam, FTHG, FTAG.
 
-1. Open **Overview → Load synthetic demo data**.
-2. Open **Train & freeze**. Keep the five default dates and select the Demo leagues.
-3. Click **Train and save frozen version**, then wait for completion.
-4. Open **Forecasts**, choose the new version and **Live**, and generate the future demo fixtures.
-5. Open **Explanations** for probability charts, TreeSHAP, batch feature importance and Dixon–Coles score grids.
-6. To test evaluation immediately, return to Forecasts and choose **Historical replay**. Use 2025-08-01 as cutoff and 2025-08-14 as final date. Save this batch.
-7. Open **Performance**, select that replay batch, and inspect scores against existing demo results.
+Date supports day-first dates such as 11/08/2023 or ISO 2023-08-11.
+Div identifies the league if present. FTR, if present, must agree with goals.
+Time is accepted but not used: this application works at calendar-day resolution.
+All the other columns can remain in the file.
 
-All demo teams and scores are fictional. Demo scores are not research findings. History is generated up to yesterday and upcoming fixtures are seven days ahead. Demo leagues are separate from your real leagues.
+Upload multiple seasons together if you wish. Duplicated fixtures are rejected rather than counted twice. If multiple league codes are present, choose one league to train. Keep team names and Div codes consistent across files.
 
-## Load your research data
+The included examples/historical_example.csv is the user's supplied 380-match Premier League 2023/24 CSV, not synthetic data.
 
-### Completed matches
+## Automatic training
 
-Use **Data & readiness → Import matches → Completed matches / results**.
+The application creates six features from each team's last three earlier matches:
+home/away points, goals scored and goals conceded. It never uses the current fixture's scores, shots or corners as inputs. Same-day matches are excluded.
 
-**Football-Data files** require Date, HomeTeam, AwayTeam, FTHG and FTAG. Time is optional; FTR is checked against goals if present. Select fallback league and season, for example Premier League / 2023/24. Import different seasons separately unless each CSV contains its own metadata. One fallback league/season applies to the entire upload batch.
+It splits feature-ready fixtures into approximately:
+- 60% training;
+- 20% calibration and model choice;
+- 20% test.
 
-Set the local timezone correctly: Europe/London for Premier League, Europe/Madrid for LaLiga. Missing Time means midnight local time.
+All fixtures on the same calendar date stay in the same partition, so exact percentages vary.
+At least 70 feature-ready fixtures are required. The date-preserving split must provide at least 30 training, 10 calibration and 10 test fixtures. The nearest feasible 60/20/20 split is chosen. A warning marks small calibration/test blocks as preliminary. A full season is optional.
+Every market outcome must occur in the training block.
 
-**Canonical CSVs** require league, season, kickoff, home_team, away_team, home_goals, away_goals. Recommended: fixture_id and available_at. Kickoff is ISO 8601 UTC (e.g. 2026-11-14T15:00:00Z); timestamps without offsets are interpreted as UTC.
+Models:
+- XGBoost: 100 trees, depth 2, learning rate 0.05, seed 42.
+- Dixon–Coles: team attack, defence, home advantage and low-score correction.
+- Temperature scaling fitted on the calibration block.
+- Historical-frequency baseline from the same feature-ready training rows.
 
-Auto-generated IDs use season|home_team|away_team. Supply unique fixture IDs for repeat pairings in a season. Match names must be identical across history, xG and upcoming fixtures; no fuzzy team matching is performed. Scores must be regulation full-time results, excluding extra time and shoot-outs.
+Market labels:
+- 1X2: H home win, D draw, A away win.
+- O/U 1.5: Under means 0 or 1 total goals; Over means 2 or more.
+- BTTS: Yes means both teams score.
 
-Imports persist across browser sessions and restarts in SQLite.
+A model/variant is chosen separately for each market using calibration log loss. Test results do not select the deployed variant. Calibration is also fitted on this development block, so the separate test block is essential for assessing generalization.
 
-### xG
+The models remain fitted on the training block. They are not secretly refitted on the test data, which would invalidate the saved calibration. Upcoming predictions use the uploaded completed history to construct current form inputs.
 
-Use **Attach xG** after importing completed matches. Required columns: fixture_id, home_xg, away_xg, provider. Include league when IDs are ambiguous. Optional: source_url, xg_available_at.
+Upload updated history and train again to refresh the saved model. This is a new exploratory evaluation; repeatedly inspecting and changing settings does not create fresh confirmatory evidence.
 
-If your match_xg.csv lacks a provider column, add the accurate label from your documented source. Player-summed xG should be labelled as such. Do not invent source URLs or provider provenance.
+## Phase One visuals
 
-Use one consistent provider definition per xG version. Upcoming matches do not need their own xG: inputs are the last three completed matches. Missing or incompatible lagged xG causes abstention, not silent substitution of a form-only model. Independently published team-total validation remains pending.
+- Observed home/draw/away counts.
+- Total goals distribution.
+- Team goals and summary statistics.
+- Log loss and accuracy comparisons for raw/calibrated models and baseline.
+- Brier scores (sum over classes, including both binary outcomes).
+- Chosen-model confusion matrix and reliability diagram with bin counts.
+- Exact native TreeSHAP global importance and individual waterfall explanations.
+- Optional 1X2 closing-odds comparison if AvgCH, AvgCD and AvgCA are available.
 
-### Upcoming fixtures and results
+Descriptive charts use the entire uploaded dataset; model scores use only the test block.
+The test simulation uses earlier completed test dates as history for later test fixtures. This is a rolling feature evaluation with fixed fitted models.
 
-Use **Upcoming fixtures** with league, season, fixture_id, kickoff, home_team and away_team. Scores must be absent or blank. The included templates contain illustrative dates and teams; replace them with your fixtures.
+TreeSHAP explains XGBoost raw margins, even when the selected model is Dixon–Coles. It does not explain Dixon–Coles or directly add up to a calibrated probability. Contribution sums are checked against model margins. Binary explanations concern Over/Yes; 1X2 explanations concern class margins.
 
-After the match, import a completed-match CSV with the same identity. Explicit correction checkboxes allow intentional changes to existing scores or kickoffs; normal uploads reject conflicts. A changed kickoff excludes the original snapshot from evaluation.
+## Phase Two input
 
-### Optional bookmaker odds
+Required columns: Date, HomeTeam, AwayTeam.
+Optional columns: Div, Time.
+FTHG and FTAG must be absent or blank.
 
-| Market | Outcome order | Columns |
-| --- | --- | --- |
-| 1X2 | H, D, A | AvgCH, AvgCD, AvgCA |
-| O/U 1.5 | Under, Over | odds_under_1_5, odds_over_1_5 |
-| BTTS | No, Yes | odds_btts_no, odds_btts_yes |
+All fixture dates must be AFTER the last date in uploaded history. This avoids accidentally presenting old training/evaluation matches as future forecasts.
+Team names must match exactly. A team without three earlier matches is shown as unavailable with a reason.
+If Div is absent, the saved model's league is assumed.
 
-Import these with completed results. Complete finite decimal odds greater than 1 are required for all outcomes. Probabilities are normalized reciprocals. O/U 2.5 odds never substitute for O/U 1.5. Closing odds are a retrospective benchmark, not a forecast input.
+Download a template directly from Phase Two; it uses known team spelling.
+The example/template pairings and dates are illustrative, NOT official fixtures.
+With the included 2023/24 history, the May 2024 upcoming example is a retrospective demonstration. For current forecasts, upload current completed-match history and genuinely upcoming fixtures.
 
-## Training and freezing
+Every target uses only the uploaded completed history. Results predicted for earlier upcoming fixtures are never treated as actual results for later ones.
 
-The application follows the notebook recipe with explicit persistence and application checks:
+The output shows all market probabilities and the most likely outcome per market.
+“Most likely” is not a guaranteed result and is not the original research policy's validation-qualified betting selection. There are no automated bets or profitability claims.
 
-- Six form features: home/away last-three sums of points, goals scored and conceded.
-- Optional four xG features: home/away last-three sums of xG for and against.
-- XGBoost: 100 trees, depth 2, learning rate 0.05, seed 42, one CPU thread.
-- Dixon–Coles: centered attack/defence effects, home advantage, low-score correction and no time decay; fitted to earlier scores. Unseen teams use neutral effects and are flagged.
-- Temperature scaling: 0.25–4, fitted only on calibration data.
-- Candidates: raw/scaled XGBoost and raw/scaled Dixon–Coles.
-- Choose each market's candidate by mean log-loss skill against its training-frequency baseline over two ranking windows.
-- League eligibility requires positive skill in both windows.
-- Common eligibility requires positive average league skill in both windows; underlying per-league forecasts stay the same.
-- Threshold grid: 0.500–0.900 by 0.025. Choose maximum supported coverage meeting the target, otherwise supported fallback; no supported threshold means no selections.
-- At most one eligible market per fixture: highest confidence with alphabetical market tie-breaking.
-- Thresholds are pooled across included leagues per policy, as in the notebook. League market eligibility is separate.
-- No refit after validation. Changing cutoffs creates a new version.
+Dixon–Coles uses neutral team effects for teams absent from its fitted training period; this is flagged if such teams have enough recent form to forecast.
 
-Default exclusive boundaries at 00:00 UTC:
-training ends 2024-08-01; calibration ends 2024-12-01; ranking 1 ends 2025-01-15; ranking 2 ends 2025-02-15; threshold validation ends 2025-04-01.
+## Persistence and files
 
-Each partition needs the configured minimum ready-fixture count. Increase history rather than weakening support just to force a selection.
+Training automatically saves native XGBoost UBJ models, JSON metadata, and history under saved_models. The most recent successful model loads when the app restarts. No pickle is used. Do not load model files from untrusted sources.
 
-Saved versions contain XGBoost UBJ files plus JSON parameters, calibration, baselines, rankings, thresholds, feature order, dependency versions and a data hash. No pickle is used.
+Uploading a new historical file does not change the saved model until Train is clicked. The app labels the active model's history range. Forecast exports are CSV downloads; this simple version does not keep a SQLite forecast ledger.
 
-**No fitted real-data models ship with the app.** Train a version after importing your data. This is a new fit, not a claim that notebook results have been reproduced. The optional calibrated xG version is a new configuration distinct from the report's raw xG ablation.
+Files:
+- app.py: two-tab interface and charts;
+- engine.py: CSV checks, feature engineering, training, prediction and persistence;
+- models.py: XGBoost, Dixon–Coles, temperature scaling and TreeSHAP;
+- examples/: your historical example and illustrative upcoming input;
+- tests/: integration and regression tests;
+- requirements.txt: dependencies.
 
-## Live versus replay
+This is a local single-user app. Run it in its own folder; it does not migrate or change the old prototype's workspace.
+The SOCCER_SIMPLE_DATA environment variable can point saved models elsewhere.
 
-**Live** uses current UTC time and unplayed future fixtures. Every target in a batch shares the same cutoff; it does not gain results from intervening games. Generate a new batch nearer kickoff when needed.
-
-**Historical replay** uses a past cutoff and remains labelled retrospective. Targets may have existing scores, but those scores are excluded from their inputs. Forecasting before the saved policy's freeze date is blocked.
-
-Both modes:
-- exclude matches on the cutoff's UTC calendar day;
-- require earlier result availability (default assumption: kickoff + 3 hours);
-- require earlier xG availability for xG inputs;
-- require three prior completed fixtures per team;
-- preserve input features, probabilities, baselines, selection, model version, cutoff and explanations;
-- record actual generation time and a source-data hash.
-
-Three-hour availability is an assumption, not a verified publication timestamp. Supply actual availability timestamps where known. Current CSVs cannot reconstruct retrospectively revised provider data. Replay is not prospective validation.
-
-## Explanations
-
-Native XGBoost exact TreeSHAP is used through pred_contribs=True. The separate shap package is not required.
-
-- Contributions plus bias are checked against raw margins.
-- Binary explanations concern the positive outcome (Over or Yes) in log-odds.
-- 1X2 class margins are jointly transformed by softmax.
-- Raw and temperature-scaled XGBoost probabilities are shown separately.
-- XGBoost SHAP never claims to explain a Dixon–Coles selection.
-- Dixon–Coles displays its own expected goal rates and score distribution.
-- Aggregate importance uses one saved batch, league and model version.
-- Attribution describes model behaviour, not causality.
-
-The app provides local and batch visuals; notebooks remain the source of cross-season explanation-stability research.
-
-## Performance tracking
-
-Choose a saved batch after importing its results. Outputs include:
-- readiness, settled fixtures, selections and coverage on settled ready fixtures;
-- selection hit rate, matched-frequency hit rate and paired difference;
-- descriptive four-week block-bootstrap intervals when at least two blocks exist;
-- per-league/market log loss and summed multiclass Brier score;
-- exact-market odds-matched comparisons;
-- reliability plots with bin counts;
-- CSV exports of per-fixture scores and selections.
-
-Unsettled matches are excluded, not counted as failures. Compare one batch at a time to avoid double-counting repeated predictions. Do not tune a version on these outcomes and describe the resulting scores as untouched test evidence. The prototype makes no guaranteed accuracy or profitability claims.
-
-## Project and storage
-
-| File | Purpose |
-| --- | --- |
-| app.py | Streamlit screens |
-| soccer/data.py | CSV validation and lagged features |
-| soccer/models.py | Models, calibration, TreeSHAP |
-| soccer/training.py | Chronological fitting and frozen policies |
-| soccer/forecast.py | Immutable forecast generation |
-| soccer/storage.py | SQLite persistence |
-| soccer/evaluation.py | Metrics, reliability and uncertainty |
-| soccer/demo.py | Fictional data |
-| tests/ | Regression and UI tests |
-| examples/ | CSV templates |
-| workspace/ | Created at runtime: database and model bundles |
-
-Set SOCCER_DATA_DIR to change storage location. Back up the workspace directory with the application stopped. This is a local, single-user prototype, with no authentication or production hosting setup.
-
-Export a model ZIP from Train & freeze. To move it, extract into workspace/models/<bundle_id>/ with manifest.json and the UBJ files together. Only load bundles you trust. Copy the database too if you want history and forecast records.
-
-## Tests and debugging
-
-Windows:
+## Tests
 
     .\.venv\Scripts\python.exe -m pytest -q
 
-macOS/Linux:
-
-    .venv/bin/python -m pytest -q
-
-Tests use synthetic data and do not execute research notebooks. They fit a small synthetic version to verify chronology, serialization, SHAP and result matching.
-
-UI errors include expandable tracebacks. Common causes are wrong fallback seasons, mismatched team names, unlabelled xG, insufficient validation fixtures, missing recent xG, a pre-freeze cutoff or already-started live targets.
-
-Use a supported 64-bit interpreter if XGBoost installation fails. On macOS, XGBoost may need the OpenMP runtime. See TESTING.md for tested versions.
-
-## Scope
-
-Implemented: uploads, persistent data, optional xG, chronological training, calibration, market eligibility, thresholds, live/replay inference, explanations, result matching, metrics and exports.
-
-Not implemented: automatic feeds, bookmaker accounts or betting, live odds, authentication, scheduled retraining, production deployment, independent external xG validation.
+Tests fit the application models using the supplied historical example; they do not run the research notebooks. See TESTING.md for actual verification results.
 
 Official API references:
-- https://docs.streamlit.io/develop/api-reference
-- https://docs.streamlit.io/develop/api-reference/app-testing/st.testing.v1.apptest
-- https://xgboost.readthedocs.io/en/stable/prediction.html
-- https://xgboost.readthedocs.io/en/stable/tutorials/saving_model.html
+https://docs.streamlit.io/develop/api-reference/widgets/st.file_uploader
+https://docs.streamlit.io/develop/api-reference/layout/st.tabs
+https://xgboost.readthedocs.io/en/stable/prediction.html

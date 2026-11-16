@@ -1,7 +1,7 @@
 {
   "version": "0.2.0",
   "configurations": [{
-    "name": "Debug MatchLab",
+    "name": "Debug Soccer Forecast",
     "type": "debugpy",
     "request": "launch",
     "module": "streamlit",
